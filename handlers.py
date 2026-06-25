@@ -143,22 +143,7 @@ async def finish_registration(message: Message, state: FSMContext, bot: Bot, pho
             except:
                 pass
 
-# ===================== AI — har qanday matn =====================
-@router.message(F.text & ~F.text.startswith("/"))
-async def ai_handler(message: Message, state: FSMContext):
-    # Agar state bo'lsa (ro'yxat jarayonida) — bu handlerga tushmaydi
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
 
-    # Tugmalar
-    if message.text in ["✍️ Ro'yxatdan o'tish", "📅 Kunlik", "📆 Haftalik", "🗓 Oylik", "📊 Umumiy",
-                         "✅ Ha, o'chiraman", "❌ Bekor qilish"]:
-        return
-
-    await message.chat.do("typing")
-    answer = await ask_ai(message.text)
-    await message.answer(answer)
 
 # ===================== /stats =====================
 @router.message(Command("stats"))
@@ -324,3 +309,24 @@ async def cancel_clear(message: Message, state: FSMContext):
 @router.message(ClearConfirm.waiting_confirm)
 async def clear_wrong_input(message: Message):
     await message.answer("⚠️ Iltimos, tugmani bosing.")
+
+# ===================== AI — har qanday matn (ENG OXIRDA) =====================
+BUTTON_TEXTS = [
+    "✍️ Ro'yxatdan o'tish",
+    "📅 Kunlik", "📆 Haftalik", "🗓 Oylik", "📊 Umumiy",
+    "✅ Ha, o'chiraman", "❌ Bekor qilish",
+    "📞 Kontaktni ulash",
+]
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def ai_handler(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
+
+    if message.text in BUTTON_TEXTS:
+        return
+
+    await message.chat.do("typing")
+    answer = await ask_ai(message.text)
+    await message.answer(answer)

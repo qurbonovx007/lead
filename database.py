@@ -3,7 +3,7 @@ import csv
 import io
 from datetime import datetime
 
-DB_PATH = "leads.db"
+DB_PATH = "/data/leads.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -78,10 +78,7 @@ async def get_user(telegram_id: int):
         )
         return await cursor.fetchone()
 
-# ============ YANGI FUNKSIYALAR ============
-
 async def get_all_leads(limit: int = 50, offset: int = 0) -> list:
-    """Barcha to'ldirilgan leadlarni qaytaradi (sahifalab)"""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("""
             SELECT telegram_id, username, full_name, phone, completed_at
@@ -94,7 +91,6 @@ async def get_all_leads(limit: int = 50, offset: int = 0) -> list:
         return rows
 
 async def get_leads_count() -> int:
-    """Jami leadlar soni"""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT COUNT(*) FROM users WHERE is_completed = 1"
@@ -102,7 +98,6 @@ async def get_leads_count() -> int:
         return (await cursor.fetchone())[0]
 
 async def clear_all_leads() -> int:
-    """Barcha foydalanuvchilarni o'chiradi, o'chirilgan sonni qaytaradi"""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("SELECT COUNT(*) FROM users")
         count = (await cursor.fetchone())[0]
@@ -111,7 +106,6 @@ async def clear_all_leads() -> int:
         return count
 
 async def export_leads_csv() -> bytes:
-    """Barcha leadlarni CSV formatida qaytaradi"""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("""
             SELECT telegram_id, username, full_name, phone, started_at, completed_at
@@ -123,8 +117,8 @@ async def export_leads_csv() -> bytes:
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Telegram ID", "Username", "Ism-Familiya", "Telefon", "Boshlagan vaqt", "Tugatgan vaqt"])
+    writer.writerow(["Telegram ID", "Username", "Ism", "Telefon", "Boshlagan vaqt", "Tugatgan vaqt"])
     for row in rows:
         writer.writerow(row)
 
-    return output.getvalue().encode("utf-8-sig")  # Excel uchun BOM
+    return output.getvalue().encode("utf-8-sig")

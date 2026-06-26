@@ -21,10 +21,10 @@ async def set_commands(bot: Bot):
             await bot.set_my_commands(
                 commands=[
                     BotCommand(command="start", description="Botni boshlash"),
-                    BotCommand(command="stats", description="📊 Statistika"),
-                    BotCommand(command="leads", description="📋 Leadlar ro'yxati"),
-                    BotCommand(command="export", description="📤 CSV eksport"),
-                    BotCommand(command="clear_leads", description="🗑 Bazani tozalash"),
+                    BotCommand(command="stats", description="Statistika"),
+                    BotCommand(command="leads", description="Leadlar royxati"),
+                    BotCommand(command="export", description="CSV eksport"),
+                    BotCommand(command="clear_leads", description="Bazani tozalash"),
                 ],
                 scope=BotCommandScopeChat(chat_id=admin_id)
             )
@@ -37,7 +37,7 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     await set_commands(bot)
-    logger.info("Bot ishga tushdi ✅")
+    logger.info("Bot ishga tushdi")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 if __name__ == "__main__":

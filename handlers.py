@@ -1,4 +1,5 @@
 import re
+import logging
 from aiogram import Router, F, Bot
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BufferedInputFile
 from aiogram.filters import CommandStart, Command
@@ -11,11 +12,10 @@ from database import (
     add_user_start, update_user_lead, get_stats, get_user,
     get_all_leads, get_leads_count, clear_all_leads, export_leads_csv
 )
-from ai import ask_ai
 
+logger = logging.getLogger(__name__)
 router = Router()
 
-# ===================== STATES =====================
 class LeadForm(StatesGroup):
     waiting_name = State()
     waiting_phone = State()
@@ -23,12 +23,37 @@ class LeadForm(StatesGroup):
 class ClearConfirm(StatesGroup):
     waiting_confirm = State()
 
-# ===================== MAIN KEYBOARD =====================
 def main_keyboard():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="✍️ Ro'yxatdan o'tish")]],
+        keyboard=[[KeyboardButton(text="Royxatdan otish")]],
         resize_keyboard=True
     )
+
+def is_valid_phone(text: str) -> bool:
+    """
+    Qabul qilinadigan formatlar:
+    - 901234567      (9 ta raqam)
+    - 998901234567   (12 ta raqam)
+    - +998901234567  (+ bilan 12 ta raqam)
+    Boshqa formatlar qabul qilinmaydi.
+    """
+    digits = re.sub(r'[\s\-\(\)]', '', text)
+    # + faqat boshida bo'lishi mumkin
+    if digits.startswith('+'):
+        digits = digits[1:]
+    # Faqat raqamlar qolishi kerak
+    if not digits.isdigit():
+        return False
+    # 9 raqam (masalan 901234567) yoki 12 raqam (998901234567)
+    return len(digits) in (9, 12)
+
+def normalize_phone(text: str) -> str:
+    digits = re.sub(r'[\s\-\(\)]', '', text)
+    if digits.startswith('+'):
+        digits = digits[1:]
+    if len(digits) == 9:
+        return f"+998{digits}"
+    return f"+{digits}"
 
 # ===================== /start =====================
 @router.message(CommandStart())
@@ -36,72 +61,76 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     user = message.from_user
     await add_user_start(user.id, user.username or "")
+    await message.answer(START_TEXT, reply_markup=main_keyboard())
 
-    await message.answer(
-        START_TEXT,
-        reply_markup=main_keyboard()
-    )
-
-# ===================== Ro'yxatdan o'tish =====================
-@router.message(F.text == "✍️ Ro'yxatdan o'tish")
+# ===================== Ro'yxatdan o'tish tugmasi =====================
+@router.message(F.text == "Royxatdan otish")
 async def start_registration(message: Message, state: FSMContext):
+    user = message.from_user
+
+    # Avval ro'yxatdan o'tganmi tekshiramiz
+    existing = await get_user(user.id)
+    if existing and existing[7] == 1:  # is_completed = 1
+        await message.answer(
+            "Siz allaqachon royxatdan otgansiz!\n\nMutaxassislarimiz tez orada boglanishadi.",
+            reply_markup=main_keyboard()
+        )
+        return
+
     await state.set_state(LeadForm.waiting_name)
-    await message.answer(
-        "👤 Ismingizni kiriting:",
-        reply_markup=ReplyKeyboardRemove()
-    )
+    await message.answer("Ismingizni kiriting:", reply_markup=ReplyKeyboardRemove())
 
 # ===================== Ism qabul qilish =====================
 @router.message(LeadForm.waiting_name)
 async def get_name(message: Message, state: FSMContext):
     name = message.text.strip() if message.text else ""
-
-    # Faqat raqam bo'lsa qabul qilmaymiz, lekin 1 harf ham qabul
     if not name or name.isdigit():
-        await message.answer("⚠️ Iltimos, ismingizni kiriting:")
+        await message.answer("Iltimos, ismingizni kiriting:")
         return
 
     await state.update_data(full_name=name)
     await state.set_state(LeadForm.waiting_phone)
 
-    contact_keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📞 Kontaktni ulash", request_contact=True)]],
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Kontaktni ulash", request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=True
     )
-
     await message.answer(
-        "📱 Telefon raqamingizni yuboring:",
-        reply_markup=contact_keyboard
+        f"Rahmat, {name}!\n\n"
+        "Telefon raqamingizni yuboring.\n"
+        "Kontakt tugmasini bosing yoki qolda kiriting:\n"
+        "Masalan: 901234567 yoki +998901234567",
+        reply_markup=kb
     )
 
-# ===================== Telefon — kontakt tugmasi orqali =====================
+# ===================== Telefon — kontakt tugmasi =====================
 @router.message(LeadForm.waiting_phone, F.contact)
 async def get_phone_contact(message: Message, state: FSMContext, bot: Bot):
     phone = message.contact.phone_number
+    if not phone.startswith('+'):
+        phone = f"+{phone}"
     await finish_registration(message, state, bot, phone)
 
 # ===================== Telefon — qo'lda yozish =====================
 @router.message(LeadForm.waiting_phone, F.text)
 async def get_phone_text(message: Message, state: FSMContext, bot: Bot):
     raw = message.text.strip()
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Kontaktni ulash", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
 
-    # Harflar bo'lsa qabul qilmaymiz
-    if re.search(r'[a-zA-Zа-яА-ЯёЁa-zA-Z]', raw):
+    if not is_valid_phone(raw):
         await message.answer(
-            "⚠️ Telefon raqamda harf bo'lmasligi kerak. Qaytadan kiriting:"
+            "Notogri raqam. Faqat quyidagi formatda kiriting:\n"
+            "901234567  yoki  +998901234567",
+            reply_markup=kb
         )
         return
 
-    # Faqat raqamlar va + qoldiramiz
-    phone = re.sub(r'[^\d+]', '', raw)
-
-    if len(phone) < 9:
-        await message.answer(
-            "⚠️ Noto'g'ri raqam. Qaytadan kiriting:"
-        )
-        return
-
+    phone = normalize_phone(raw)
     await finish_registration(message, state, bot, phone)
 
 # ===================== Ro'yxatni yakunlash =====================
@@ -114,64 +143,61 @@ async def finish_registration(message: Message, state: FSMContext, bot: Bot, pho
     await state.clear()
 
     await message.answer(
-        "🎉 Rahmat! Mutaxassislarimiz tez orada bog'lanishadi.",
+        "Muvaffaqiyatli royxatdan otdingiz!\n\nMutaxassislarimiz tez orada boglanishadi. Rahmat!",
         reply_markup=ReplyKeyboardRemove()
     )
 
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
-    username_text = f"@{user.username}" if user.username else "Username yo'q"
+    username_text = f"@{user.username}" if user.username else "Username yoq"
 
-    lead_message = (
-        "🔔 YANGI LEAD!\n\n"
-        f"👤 Ism-Familiya: {full_name}\n"
-        f"📞 Telefon: {phone}\n"
-        f"🆔 Username: {username_text}\n"
-        f"🔗 Telegram ID: {user.id}\n"
-        f"🕐 Vaqt: {now}"
+    lead_text = (
+        "YANGI LEAD - Mudarris Xalqaro Akademiyasi\n"
+        "-----------------------------------\n"
+        f"Ism: {full_name}\n"
+        f"Telefon: {phone}\n"
+        f"Username: {username_text}\n"
+        f"Telegram ID: {user.id}\n"
+        f"Vaqt: {now}\n"
+        "-----------------------------------"
     )
 
-    import logging as _log
-    _log.getLogger(__name__).info(f"Lead yuborilmoqda: LEADS_CHAT_ID={LEADS_CHAT_ID}")
     try:
-        await bot.send_message(chat_id=LEADS_CHAT_ID, text=lead_message)
-        _log.getLogger(__name__).info("Lead muvaffaqiyatli yuborildi ✅")
+        await bot.send_message(chat_id=LEADS_CHAT_ID, text=lead_text)
+        logger.info(f"Lead yuborildi: {full_name} {phone}")
     except Exception as e:
-        _log.getLogger(__name__).error(f"Lead yuborishda XATO: {e}")
+        logger.error(f"Lead yuborishda xato: {e}")
         for admin_id in ADMIN_IDS:
             try:
-                await bot.send_message(admin_id, f"⚠️ Lead chatga yuborishda xato:\n{e}")
+                await bot.send_message(admin_id, f"Lead chatga yuborishda xato:\n{e}")
             except:
                 pass
-
-
 
 # ===================== /stats =====================
 @router.message(Command("stats"))
 async def show_stats(message: Message):
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ Ruxsat yo'q.")
+        await message.answer("Ruxsat yoq.")
         return
 
-    stats_keyboard = ReplyKeyboardMarkup(
+    kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📅 Kunlik"), KeyboardButton(text="📆 Haftalik")],
-            [KeyboardButton(text="🗓 Oylik"), KeyboardButton(text="📊 Umumiy")]
+            [KeyboardButton(text="Kunlik"), KeyboardButton(text="Haftalik")],
+            [KeyboardButton(text="Oylik"), KeyboardButton(text="Umumiy")]
         ],
         resize_keyboard=True
     )
-    await message.answer("📊 Qaysi davrni ko'rishni xohlaysiz?", reply_markup=stats_keyboard)
+    await message.answer("Qaysi davrni ko'rishni xohlaysiz?", reply_markup=kb)
 
-# ===================== Statistika tugmalari =====================
-@router.message(F.text.in_(["📅 Kunlik", "📆 Haftalik", "🗓 Oylik", "📊 Umumiy"]))
+@router.message(F.text.in_(["Kunlik", "Haftalik", "Oylik", "Umumiy"]))
 async def show_period_stats(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
 
     period_map = {
-        "📅 Kunlik": ("day", "Bugun"),
-        "📆 Haftalik": ("week", "So'nggi 7 kun"),
-        "🗓 Oylik": ("month", "So'nggi 30 kun"),
-        "📊 Umumiy": ("all", "Barcha vaqt"),
+        "Kunlik": ("day", "Bugun"),
+        "Haftalik": ("week", "Sunggi 7 kun"),
+        "Oylik": ("month", "Sunggi 30 kun"),
+        "Umumiy": ("all", "Barcha vaqt"),
     }
 
     period_key, period_label = period_map[message.text]
@@ -183,25 +209,24 @@ async def show_period_stats(message: Message):
     conversion = round((completed / total) * 100, 1) if total > 0 else 0.0
 
     filled = int(conversion / 10)
-    bar = "🟩" * filled + "⬜" * (10 - filled)
+    bar = "X" * filled + "." * (10 - filled)
 
     await message.answer(
-        f"📊 *Statistika — {period_label}*\n"
-        "━━━━━━━━━━━━━━━\n"
-        f"👥 Boshlaganlar: *{total}* ta\n"
-        f"✅ Ro'yxatdan o'tganlar: *{completed}* ta\n"
-        f"❌ O'tmaganlar: *{not_completed}* ta\n"
-        "━━━━━━━━━━━━━━━\n"
-        f"📈 Konversiya: *{conversion}%*\n"
-        f"{bar}",
-        parse_mode="Markdown"
+        f"Statistika - {period_label}\n"
+        "-----------------------------------\n"
+        f"Boshlaganlar: {total} ta\n"
+        f"Royxatdan otganlar: {completed} ta\n"
+        f"Otmaganlar: {not_completed} ta\n"
+        "-----------------------------------\n"
+        f"Konversiya: {conversion}%\n"
+        f"[{bar}]"
     )
 
 # ===================== /leads =====================
 @router.message(Command("leads"))
 async def show_leads(message: Message):
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ Ruxsat yo'q.")
+        await message.answer("Ruxsat yoq.")
         return
 
     args = message.text.split()
@@ -214,119 +239,78 @@ async def show_leads(message: Message):
     total_pages = max(1, (total + per_page - 1) // per_page)
 
     if not leads:
-        await message.answer("📭 Hozircha lead yo'q.")
+        await message.answer("Hozircha lead yoq.")
         return
 
-    lines = [f"📋 *Leadlar* (sahifa {page}/{total_pages}, jami: {total})\n━━━━━━━━━━━━━━━"]
-
+    lines = [f"Leadlar (sahifa {page}/{total_pages}, jami: {total})\n-----------------------------------"]
     for i, (tg_id, username, full_name, phone, completed_at) in enumerate(leads, start=offset + 1):
-        uname = f"@{username}" if username else "—"
-        date_str = completed_at[:10] if completed_at else "—"
-        lines.append(
-            f"\n*{i}.* {full_name}\n"
-            f"   📞 `{phone}`\n"
-            f"   🆔 {uname} | `{tg_id}`\n"
-            f"   📅 {date_str}"
-        )
+        uname = f"@{username}" if username else "-"
+        date_str = completed_at[:10] if completed_at else "-"
+        lines.append(f"\n{i}. {full_name}\n   Tel: {phone}\n   {uname} | {date_str}")
 
-    if total_pages > 1:
-        nav = []
-        if page > 1:
-            nav.append(f"◀️ `/leads {page - 1}`")
-        if page < total_pages:
-            nav.append(f"`/leads {page + 1}` ▶️")
-        lines.append("\n━━━━━━━━━━━━━━━\n" + "   ".join(nav))
+    if page < total_pages:
+        lines.append(f"\nKeyingisi: /leads {page + 1}")
 
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+    await message.answer("\n".join(lines))
 
 # ===================== /export =====================
 @router.message(Command("export"))
 async def export_leads(message: Message, bot: Bot):
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ Ruxsat yo'q.")
+        await message.answer("Ruxsat yoq.")
         return
 
     total = await get_leads_count()
     if total == 0:
-        await message.answer("📭 Eksport uchun lead yo'q.")
+        await message.answer("Eksport uchun lead yoq.")
         return
 
-    await message.answer("⏳ CSV tayyorlanmoqda...")
+    await message.answer("CSV tayyorlanmoqda...")
     csv_bytes = await export_leads_csv()
     filename = f"leads_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
-
     await bot.send_document(
         chat_id=message.chat.id,
         document=BufferedInputFile(csv_bytes, filename=filename),
-        caption=f"📊 Jami *{total}* ta lead.",
-        parse_mode="Markdown"
+        caption=f"Jami {total} ta lead."
     )
 
 # ===================== /clear_leads =====================
 @router.message(Command("clear_leads"))
 async def clear_leads_cmd(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ Ruxsat yo'q.")
+        await message.answer("Ruxsat yoq.")
         return
 
     total = await get_leads_count()
     if total == 0:
-        await message.answer("📭 O'chirish uchun lead yo'q.")
+        await message.answer("Ochirish uchun lead yoq.")
         return
 
-    confirm_keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="✅ Ha, o'chiraman"), KeyboardButton(text="❌ Bekor qilish")]],
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Ha ochiraman"), KeyboardButton(text="Bekor qilish")]],
         resize_keyboard=True,
         one_time_keyboard=True
     )
-
     await state.set_state(ClearConfirm.waiting_confirm)
     await message.answer(
-        f"⚠️ *Diqqat!*\n\nBazada *{total}* ta yozuv bor.\nBarchasini o'chirishni tasdiqlaysizmi?\n\n_Bu amalni qaytarib bo'lmaydi!_",
-        parse_mode="Markdown",
-        reply_markup=confirm_keyboard
+        f"Diqqat! Bazada {total} ta yozuv bor.\nBarchasini ochirishni tasdiqlaysizmi?\nBu amalni qaytarib bolmaydi!",
+        reply_markup=kb
     )
 
-@router.message(ClearConfirm.waiting_confirm, F.text == "✅ Ha, o'chiraman")
+@router.message(ClearConfirm.waiting_confirm, F.text == "Ha ochiraman")
 async def confirm_clear(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await state.clear()
         return
-
     deleted = await clear_all_leads()
     await state.clear()
-    await message.answer(
-        f"🗑 *{deleted}* ta yozuv o'chirildi.\n\nBaza tozalandi ✅",
-        parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
-    )
+    await message.answer(f"{deleted} ta yozuv ochirildi. Baza tozalandi.", reply_markup=ReplyKeyboardRemove())
 
-@router.message(ClearConfirm.waiting_confirm, F.text == "❌ Bekor qilish")
+@router.message(ClearConfirm.waiting_confirm, F.text == "Bekor qilish")
 async def cancel_clear(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("✅ Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
 
 @router.message(ClearConfirm.waiting_confirm)
 async def clear_wrong_input(message: Message):
-    await message.answer("⚠️ Iltimos, tugmani bosing.")
-
-# ===================== AI — har qanday matn (ENG OXIRDA) =====================
-BUTTON_TEXTS = [
-    "✍️ Ro'yxatdan o'tish",
-    "📅 Kunlik", "📆 Haftalik", "🗓 Oylik", "📊 Umumiy",
-    "✅ Ha, o'chiraman", "❌ Bekor qilish",
-    "📞 Kontaktni ulash",
-]
-
-@router.message(F.text & ~F.text.startswith("/"))
-async def ai_handler(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-
-    if message.text in BUTTON_TEXTS:
-        return
-
-    await message.chat.do("typing")
-    answer = await ask_ai(message.text)
-    await message.answer(answer)
+    await message.answer("Iltimos, tugmani bosing.")

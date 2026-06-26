@@ -3,7 +3,7 @@ import csv
 import io
 from datetime import datetime
 
-DB_PATH = "/data/leads.db"
+DB_PATH = "leads.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -96,14 +96,6 @@ async def get_leads_count() -> int:
             "SELECT COUNT(*) FROM users WHERE is_completed = 1"
         )
         return (await cursor.fetchone())[0]
-
-async def clear_all_leads() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM users")
-        count = (await cursor.fetchone())[0]
-        await db.execute("DELETE FROM users")
-        await db.commit()
-        return count
 
 async def export_leads_csv() -> bytes:
     async with aiosqlite.connect(DB_PATH) as db:

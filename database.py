@@ -1,9 +1,13 @@
+import os
 import aiosqlite
 import csv
 import io
 from datetime import datetime
 
-DB_PATH = "leads.db"
+# Railway Volume ulanishi uchun yo'lni tekshirish.
+# Agar serverda bo'lsa, /data/leads.db papkasiga, kompyuterda bo'lsa, joriy papkaga saqlaydi.
+MOUNT_PATH = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", ".")
+DB_PATH = os.path.join(MOUNT_PATH, "leads.db")
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -115,7 +119,6 @@ async def export_leads_csv() -> bytes:
 
     return output.getvalue().encode("utf-8-sig")
 
-# ===================== YANGI QO'SHILGAN FUNKSIYA =====================
 async def clear_all_leads() -> int:
     """Ro'yxatdan to'liq o'tgan barcha leadlarni o'chiradi va o'chirilganlar sonini qaytaradi"""
     async with aiosqlite.connect(DB_PATH) as db:

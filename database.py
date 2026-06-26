@@ -114,3 +114,12 @@ async def export_leads_csv() -> bytes:
         writer.writerow(row)
 
     return output.getvalue().encode("utf-8-sig")
+
+# ===================== YANGI QO'SHILGAN FUNKSIYA =====================
+async def clear_all_leads() -> int:
+    """Ro'yxatdan to'liq o'tgan barcha leadlarni o'chiradi va o'chirilganlar sonini qaytaradi"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM users WHERE is_completed = 1")
+        row_count = cursor.rowcount
+        await db.commit()
+        return row_count
